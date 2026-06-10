@@ -7,20 +7,24 @@ Sends Windows Toast notifications when:
 3. Agent finishes a turn and terminal is NOT in foreground (transform_llm_output)
 
 Clicking any notification brings the terminal window to foreground.
+Approval notifications have 4 buttons: once/session/always/deny.
 """
 
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Path to the focus_terminal scripts (same directory as this file)
+# Paths
 _SCRIPT_DIR = Path(__file__).parent
 _FOCUS_SCRIPT = _SCRIPT_DIR / "focus_terminal.vbs"
 _PID_FILE = _SCRIPT_DIR / "hermes_pid.txt"
+_APPROVAL_REQUEST_FILE = _SCRIPT_DIR / "approval_request.txt"
+_APPROVAL_RESPONSE_FILE = _SCRIPT_DIR / "approval_response.txt"
 _FOCUS_URL = "hermes://focus"
 
 # ---------------------------------------------------------------------------
@@ -35,7 +39,6 @@ try:
         try:
             fg_hwnd = win32gui.GetForegroundWindow()
             title = win32gui.GetWindowText(fg_hwnd).lower()
-            # Check window title for terminal keywords
             keywords = ["powershell", "windowsterminal", "cmd", "mintty", "bash", "hermes"]
             return any(kw in title for kw in keywords)
         except Exception:
@@ -72,11 +75,90 @@ try:
 
         threading.Thread(target=_fire, daemon=True).start()
 
+    def _show_approval_toast(command: str, description: str) -> None:
+        """Show approval Toast with 4 action buttons."""
+        def _fire():
+            try:
+                body = command[:200] if command else description[:200]
+                toast = Notification(
+                    app_id="Hermes Agent",
+                    title="\U0001f514 Hermes \u9700\u8981\u5ba1\u6279",
+                    msg=body,
+                    duration="long",
+                    launch=_FOCUS_URL,
+                )
+                toast.add_actions("Once", "hermes://once")
+                toast.add_actions("Session", "hermes://session")
+                toast.add_actions("Always", "hermes://always")
+                toast.add_actions("Deny", "hermes://deny")
+                toast.show()
+            except Exception as e:
+                logger.error("Failed to show approval toast: %s", e)
+
+        threading.Thread(target=_fire, daemon=True).start()
+
 except ImportError:
     logger.error("winotify not installed — notifications disabled")
 
     def _show_toast(title: str, body: str, msg_type: str = "info") -> None:
         pass
+
+    def _show_approval_toast(command: str, description: str) -> None:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Plugin approval handler
+# ---------------------------------------------------------------------------
+
+def _plugin_approval_handler(command: str, description: str, timeout: int) -> Optional[str]:
+    """Called by the approval system when a dangerous command needs approval.
+
+    Shows a Toast with 4 buttons and waits for the user's choice.
+    Returns 'once', 'session', 'always', 'deny', or None (timeout/no response).
+    """
+    # Clean up any stale response file
+    try:
+        _APPROVAL_RESPONSE_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    # Write the approval request (for the protocol handler to read)
+    try:
+        _APPROVAL_REQUEST_FILE.write_text(f"{command}\n{description}")
+    except Exception:
+        pass
+
+    # Show the Toast with buttons
+    _show_approval_toast(command, description)
+
+    # Also fire the pre_approval_request hook for the simple notification
+    # (the hook-based notification is already handled by the hook system)
+
+    # Wait for the response file to appear
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            if _APPROVAL_RESPONSE_FILE.exists():
+                choice = _APPROVAL_RESPONSE_FILE.read_text().strip()
+                if choice in ("once", "session", "always", "deny"):
+                    # Clean up
+                    try:
+                        _APPROVAL_RESPONSE_FILE.unlink(missing_ok=True)
+                        _APPROVAL_REQUEST_FILE.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    return choice
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+    # Timeout — clean up and return None (fall through to CLI)
+    try:
+        _APPROVAL_REQUEST_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +167,12 @@ except ImportError:
 
 def _on_pre_approval_request(**kwargs: Any) -> None:
     """Fired when a dangerous command needs user approval."""
+    # Don't show the simple notification if plugin approval handler is active
+    # (the approval toast with buttons is already shown by _plugin_approval_handler)
+    from tools.approval import _plugin_approval_handler as handler
+    if handler is not None:
+        return  # Skip — the approval toast is already showing
+
     command = kwargs.get("command", "")
     description = kwargs.get("description", "")
     body = command[:200] if command else description[:200]
@@ -137,14 +225,18 @@ def register(ctx: Any) -> None:
     ctx.register_hook("post_tool_call", _on_post_tool_call)
     ctx.register_hook("transform_llm_output", _on_transform_llm_output)
     logger.info("win_notify plugin registered: approval + error + completion notifications")
-    if _FOCUS_URL:
-        logger.info("win_notify: click-to-focus enabled via %s", _FOCUS_SCRIPT)
-    else:
-        logger.warning("win_notify: focus script not found at %s", _FOCUS_SCRIPT)
 
-    # Write current process PID for the focus script to find the terminal
+    # Write current process PID for the focus script
     try:
         _PID_FILE.write_text(str(os.getpid()))
         logger.info("win_notify: wrote PID %d to %s", os.getpid(), _PID_FILE)
     except Exception as e:
         logger.warning("win_notify: failed to write PID file: %s", e)
+
+    # Register the plugin approval handler
+    try:
+        from tools.approval import set_plugin_approval_handler
+        set_plugin_approval_handler(_plugin_approval_handler)
+        logger.info("win_notify: registered plugin approval handler (Toast with buttons)")
+    except Exception as e:
+        logger.warning("win_notify: failed to register approval handler: %s", e)

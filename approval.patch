@@ -1,0 +1,113 @@
+commit 751f0895ec34886f4d56e66a3135002c03ef1ef7
+Author: Henry-916 <2470184625@qq.com>
+Date:   Wed Jun 10 22:55:27 2026 +0800
+
+    feat: add plugin approval channel in approval.py - allows plugins to inject approval responses (used by win_notify Toast buttons)
+
+diff --git a/tools/approval.py b/tools/approval.py
+index 2fba7e110..ba9e75a21 100644
+--- a/tools/approval.py
++++ b/tools/approval.py
+@@ -637,6 +637,30 @@ class _ApprovalEntry:
+ _gateway_queues: dict[str, list] = {}        # session_key → [_ApprovalEntry, …]
+ _gateway_notify_cbs: dict[str, object] = {}  # session_key → callable(approval_data)
+ 
++# Plugin approval channel — allows plugins to provide approval responses
++# (e.g. via Toast notification buttons) before falling back to CLI/gateway.
++_plugin_approval_handler = None  # callable(command, description, timeout) -> str | None
++
++
++def set_plugin_approval_handler(handler) -> None:
++    """Register a plugin approval handler.
++
++    The handler signature is ``handler(command: str, description: str,
++    timeout: int) -> str | None`` where the return value is one of
++    ``"once"``, ``"session"``, ``"always"``, ``"deny"``, or ``None``
++    (meaning "no response, fall through to CLI/gateway").
++    """
++    global _plugin_approval_handler
++    _plugin_approval_handler = handler
++    logger.info("set_plugin_approval_handler called! handler=%s, _plugin_approval_handler now=%s",
++                handler, "SET" if _plugin_approval_handler is not None else "NONE")
++
++
++def clear_plugin_approval_handler() -> None:
++    """Unregister the plugin approval handler."""
++    global _plugin_approval_handler
++    _plugin_approval_handler = None
++
+ 
+ def register_gateway_notify(session_key: str, cb) -> None:
+     """Register a per-session callback for sending approval requests to the user.
+@@ -1075,6 +1099,34 @@ def check_dangerous_command(command: str, env_type: str,
+     if is_approved(session_key, pattern_key):
+         return {"approved": True, "message": None}
+ 
++    # --- Plugin approval channel ---
++    # Try the plugin handler first (e.g. Toast notification with buttons).
++    # If the plugin returns a valid choice, use it directly.
++    # If it returns None, fall through to CLI/gateway.
++    if _plugin_approval_handler is not None:
++        try:
++            plugin_timeout = _get_approval_timeout() or 60
++            plugin_choice = _plugin_approval_handler(command, description, plugin_timeout)
++            if plugin_choice in ("once", "session", "always", "deny"):
++                logger.info("Plugin approval handler returned: %s (command: %s)",
++                            plugin_choice, command[:100])
++                if plugin_choice == "deny":
++                    return {
++                        "approved": False,
++                        "message": f"BLOCKED: Plugin denied this potentially dangerous command (matched '{description}' pattern).",
++                        "pattern_key": pattern_key,
++                        "description": description,
++                    }
++                if plugin_choice == "session":
++                    approve_session(session_key, pattern_key)
++                elif plugin_choice == "always":
++                    approve_session(session_key, pattern_key)
++                    approve_permanent(pattern_key)
++                    save_permanent_allowlist(_permanent_approved)
++                return {"approved": True, "message": None}
++        except Exception as exc:
++            logger.warning("Plugin approval handler failed: %s — falling through", exc)
++
+     is_cli = env_var_enabled("HERMES_INTERACTIVE")
+     is_gateway = _is_gateway_approval_context()
+ 
+@@ -1409,6 +1461,36 @@ def check_all_command_guards(command: str, env_type: str,
+     all_keys = [key for key, _, _ in warnings]
+     has_tirith = any(is_t for _, _, is_t in warnings)
+ 
++    # --- Plugin approval channel ---
++    # Try the plugin handler first (e.g. Toast notification with buttons).
++    if _plugin_approval_handler is not None:
++        try:
++            plugin_timeout = _get_approval_timeout() or 60
++            plugin_choice = _plugin_approval_handler(command, combined_desc, plugin_timeout)
++            if plugin_choice in ("once", "session", "always", "deny"):
++                logger.info("Plugin approval handler returned: %s (command: %s)",
++                            plugin_choice, command[:100])
++                if plugin_choice == "deny":
++                    return {
++                        "approved": False,
++                        "message": f"BLOCKED: Plugin denied this command (matched '{combined_desc}' pattern).",
++                        "pattern_key": primary_key,
++                        "description": combined_desc,
++                    }
++                if plugin_choice == "session":
++                    for key, _, _ in warnings:
++                        approve_session(session_key, key)
++                elif plugin_choice == "always":
++                    for key, _, is_tirith in warnings:
++                        approve_session(session_key, key)
++                        if not is_tirith:
++                            approve_permanent(key)
++                    save_permanent_allowlist(_permanent_approved)
++                return {"approved": True, "message": None,
++                        "user_approved": True, "description": combined_desc}
++        except Exception as exc:
++            logger.warning("Plugin approval handler failed: %s — falling through", exc)
++
+     # Gateway/async approval — block the agent thread until the user
+     # responds with /approve or /deny, mirroring the CLI's synchronous
+     # input() flow.  The agent never sees "approval_required"; it either

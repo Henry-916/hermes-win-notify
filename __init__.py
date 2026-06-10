@@ -29,80 +29,20 @@ _FOCUS_URL = "hermes://focus"
 
 try:
     import win32gui
-    import win32process
 
     def _is_terminal_foreground() -> bool:
-        """Check if the Hermes terminal window is in the foreground.
-
-        Uses the PID file to find the terminal window, then checks if
-        it (or any parent process window) is the foreground window.
-        """
+        """Check if a terminal window is currently in the foreground."""
         try:
-            # Read the Hermes PID
-            if not _PID_FILE.exists():
-                return True  # Can't determine, assume foreground
-            hermes_pid = int(_PID_FILE.read_text().strip())
-
-            # Get the foreground window's process ID
             fg_hwnd = win32gui.GetForegroundWindow()
-            _, fg_pid = win32process.GetWindowThreadProcessId(fg_hwnd)
-
-            # Walk up from Hermes PID to find if foreground window belongs to our process tree
-            pid = hermes_pid
-            for _ in range(10):
-                if fg_pid == pid:
-                    return True
-                # Get parent PID via ctypes (faster than WMI)
-                parent = _get_parent_pid(pid)
-                if parent == 0 or parent == pid:
-                    break
-                pid = parent
-
-            return False
+            title = win32gui.GetWindowText(fg_hwnd).lower()
+            # Check window title for terminal keywords
+            keywords = ["powershell", "windowsterminal", "cmd", "mintty", "bash", "hermes"]
+            return any(kw in title for kw in keywords)
         except Exception:
-            return True  # On error, assume foreground (don't notify)
-
-    def _get_parent_pid(pid: int) -> int:
-        """Get parent process ID using CreateToolhelp32Snapshot."""
-        import ctypes
-        TH32CS_SNAPPROCESS = 0x00000002
-
-        class PROCESSENTRY32(ctypes.Structure):
-            _fields_ = [
-                ("dwSize", ctypes.c_uint),
-                ("cntUsage", ctypes.c_uint),
-                ("th32ProcessID", ctypes.c_uint),
-                ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
-                ("th32ModuleID", ctypes.c_uint),
-                ("cntThreads", ctypes.c_uint),
-                ("th32ParentProcessID", ctypes.c_uint),
-                ("pcPriClassBase", ctypes.c_long),
-                ("dwFlags", ctypes.c_uint),
-                ("szExeFile", ctypes.c_char * 260),
-            ]
-
-        kernel32 = ctypes.windll.kernel32
-        snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-        if snapshot == -1:
-            return 0
-
-        entry = PROCESSENTRY32()
-        entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
-
-        parent = 0
-        if kernel32.Process32First(snapshot, ctypes.byref(entry)):
-            while True:
-                if entry.th32ProcessID == pid:
-                    parent = entry.th32ParentProcessID
-                    break
-                if not kernel32.Process32Next(snapshot, ctypes.byref(entry)):
-                    break
-
-        kernel32.CloseHandle(snapshot)
-        return parent
+            return True
 
 except ImportError:
-    logger.warning("win32gui/win32process not available — foreground detection disabled")
+    logger.warning("win32gui not available — foreground detection disabled")
 
     def _is_terminal_foreground() -> bool:
         return False

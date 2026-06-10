@@ -150,6 +150,8 @@ def main():
             action = "always"
         elif "deny" in arg:
             action = "deny"
+        elif "dismiss" in arg:
+            action = "dismiss"
         else:
             action = "focus"
 

@@ -85,6 +85,7 @@ try:
                     title="\U0001f514 Hermes \u9700\u8981\u5ba1\u6279",
                     msg=body,
                     duration="long",
+                    launch="hermes://dismiss",
                 )
                 toast.add_actions("Once", "hermes://once")
                 toast.add_actions("Session", "hermes://session")
@@ -140,13 +141,16 @@ def _plugin_approval_handler(command: str, description: str, timeout: int) -> Op
         try:
             if _APPROVAL_RESPONSE_FILE.exists():
                 choice = _APPROVAL_RESPONSE_FILE.read_text().strip()
-                if choice in ("once", "session", "always", "deny"):
+                if choice in ("once", "session", "always", "deny", "dismiss"):
                     # Clean up
                     try:
                         _APPROVAL_RESPONSE_FILE.unlink(missing_ok=True)
                         _APPROVAL_REQUEST_FILE.unlink(missing_ok=True)
                     except Exception:
                         pass
+                    # "dismiss" means user wants terminal prompt
+                    if choice == "dismiss":
+                        return None
                     return choice
         except Exception:
             pass

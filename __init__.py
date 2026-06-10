@@ -74,6 +74,7 @@ try:
                     title=title,
                     msg=body,
                     duration="long",
+                    launch=_FOCUS_URL,
                 )
                 # Add a "back to terminal" button
                 if _FOCUS_URL:

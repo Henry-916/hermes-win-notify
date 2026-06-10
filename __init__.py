@@ -118,6 +118,12 @@ def _plugin_approval_handler(command: str, description: str, timeout: int) -> Op
     Returns 'once', 'session', 'always', 'deny', or None (timeout/no response).
     """
     # Clean up any stale response file
+    # If terminal is in foreground, skip toast and fall through to terminal prompt
+    if _is_terminal_foreground():
+        logger.info("win_notify: terminal in foreground, skipping toast approval")
+        return None
+
+    # Clean up any stale response file
     try:
         _APPROVAL_RESPONSE_FILE.unlink(missing_ok=True)
     except Exception:

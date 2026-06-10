@@ -17,9 +17,10 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Path to the focus_terminal.ps1 script (same directory as this file)
+# Path to the focus_terminal scripts (same directory as this file)
 _SCRIPT_DIR = Path(__file__).parent
 _FOCUS_SCRIPT = _SCRIPT_DIR / "focus_terminal.vbs"
+_PID_FILE = _SCRIPT_DIR / "hermes_pid.txt"
 _FOCUS_URL = f"file:///{_FOCUS_SCRIPT.as_posix()}" if _FOCUS_SCRIPT.exists() else ""
 
 # ---------------------------------------------------------------------------
@@ -150,3 +151,10 @@ def register(ctx: Any) -> None:
         logger.info("win_notify: click-to-focus enabled via %s", _FOCUS_SCRIPT)
     else:
         logger.warning("win_notify: focus script not found at %s", _FOCUS_SCRIPT)
+
+    # Write current process PID for the focus script to find the terminal
+    try:
+        _PID_FILE.write_text(str(os.getpid()))
+        logger.info("win_notify: wrote PID %d to %s", os.getpid(), _PID_FILE)
+    except Exception as e:
+        logger.warning("win_notify: failed to write PID file: %s", e)

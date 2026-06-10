@@ -1,5 +1,8 @@
 # focus_terminal.ps1 — Bring the Hermes terminal window to foreground
-# Called when user clicks a Toast notification
+# Reads hermes_pid.txt to find the Hermes agent process, then walks up
+# the process tree to find and focus the terminal window.
+
+$ErrorActionPreference = 'SilentlyContinue'
 
 Add-Type @"
 using System;
@@ -31,56 +34,74 @@ public class WindowFocus {
     
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     
-    static uint _selfPid = 0;
-    
-    public static void FocusHermesWindow() {
-        _selfPid = (uint)Process.GetCurrentProcess().Id;
-        
-        // First pass: look for windows with "hermes" in title
-        bool found = EnumWindows((hWnd, lParam) => {
+    public static bool FocusWindowByPid(uint targetPid) {
+        bool found = false;
+        EnumWindows((hWnd, lParam) => {
             if (!IsWindowVisible(hWnd)) return true;
-            
-            // Skip our own window
             uint pid;
             GetWindowThreadProcessId(hWnd, out pid);
-            if (pid == _selfPid) return true;
-            
-            var sb = new StringBuilder(256);
-            GetWindowText(hWnd, sb, 256);
-            string title = sb.ToString().ToLower();
-            
-            if (title.Contains("hermes") || title.Contains("hermes agent")) {
+            if (pid == targetPid) {
                 if (IsIconic(hWnd)) ShowWindow(hWnd, 9);
                 SetForegroundWindow(hWnd);
-                return false; // stop
+                found = true;
+                return false;
             }
             return true;
         }, IntPtr.Zero);
-        
-        // Fallback: find any terminal window (excluding self)
-        if (!found) {
-            string[] names = {"windowsterminal", "powershell", "cmd", "mintty", "bash"};
-            EnumWindows((hWnd, lParam) => {
-                if (!IsWindowVisible(hWnd)) return true;
-                uint pid;
-                GetWindowThreadProcessId(hWnd, out pid);
-                if (pid == _selfPid) return true;
-                
-                var sb = new StringBuilder(256);
-                GetWindowText(hWnd, sb, 256);
-                string title = sb.ToString().ToLower();
-                foreach (var name in names) {
-                    if (title.Contains(name)) {
-                        if (IsIconic(hWnd)) ShowWindow(hWnd, 9);
-                        SetForegroundWindow(hWnd);
-                        return false;
-                    }
+        return found;
+    }
+    
+    public static void FocusAnyTerminal() {
+        string[] names = {"windowsterminal", "powershell", "cmd", "mintty", "bash"};
+        EnumWindows((hWnd, lParam) => {
+            if (!IsWindowVisible(hWnd)) return true;
+            var sb = new StringBuilder(256);
+            GetWindowText(hWnd, sb, 256);
+            string title = sb.ToString().ToLower();
+            foreach (var name in names) {
+                if (title.Contains(name)) {
+                    if (IsIconic(hWnd)) ShowWindow(hWnd, 9);
+                    SetForegroundWindow(hWnd);
+                    return false;
                 }
-                return true;
-            }, IntPtr.Zero);
-        }
+            }
+            return true;
+        }, IntPtr.Zero);
     }
 }
 "@
 
-[WindowFocus]::FocusHermesWindow()
+# Read the PID file
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$pidFile = Join-Path $scriptDir "hermes_pid.txt"
+
+if (Test-Path $pidFile) {
+    $hermesPid = [int](Get-Content $pidFile -Raw).Trim()
+    
+    # Walk up the process tree from the Hermes PID to find the terminal
+    $pid = $hermesPid
+    $focused = $false
+    for ($i = 0; $i -lt 10; $i++) {
+        $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+        if (-not $proc) { break }
+        
+        # Check if this process has a visible window
+        if ($proc.MainWindowHandle -ne 0) {
+            [WindowFocus]::FocusWindowByPid([uint32]$pid)
+            $focused = $true
+            break
+        }
+        
+        # Go to parent process
+        $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $pid" -ErrorAction SilentlyContinue
+        if (-not $cim -or -not $cim.ParentProcessId) { break }
+        $pid = $cim.ParentProcessId
+    }
+    
+    if (-not $focused) {
+        [WindowFocus]::FocusAnyTerminal()
+    }
+} else {
+    # No PID file, fallback to any terminal
+    [WindowFocus]::FocusAnyTerminal()
+}

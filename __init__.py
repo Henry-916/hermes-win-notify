@@ -117,6 +117,10 @@ def _plugin_approval_handler(command: str, description: str, timeout: int) -> Op
     Shows a Toast with 4 buttons and waits for the user's choice.
     Returns 'once', 'session', 'always', 'deny', or None (timeout/no response).
     """
+    # If terminal is in foreground, skip toast and let terminal handle it
+    if _is_terminal_foreground():
+        return None
+
     # Clean up any stale response file
     try:
         _APPROVAL_RESPONSE_FILE.unlink(missing_ok=True)

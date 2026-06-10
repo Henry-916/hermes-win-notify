@@ -66,8 +66,7 @@ try:
                     msg=body,
                     duration="long",
                 )
-                # Silent — no audio per user preference
-                toast.set_audio(audio.Silent, loop=False)
+                # No audio — just show the toast
                 toast.show()
             except Exception as e:
                 logger.error("Failed to show toast: %s", e)

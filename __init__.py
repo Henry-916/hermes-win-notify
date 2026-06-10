@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Path to the focus_terminal.ps1 script (same directory as this file)
 _SCRIPT_DIR = Path(__file__).parent
-_FOCUS_SCRIPT = _SCRIPT_DIR / "focus_terminal.ps1"
+_FOCUS_SCRIPT = _SCRIPT_DIR / "focus_terminal.bat"
 _FOCUS_URL = f"file:///{_FOCUS_SCRIPT.as_posix()}" if _FOCUS_SCRIPT.exists() else ""
 
 # ---------------------------------------------------------------------------

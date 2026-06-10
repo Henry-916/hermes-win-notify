@@ -1,0 +1,5 @@
+name: win_notify
+version: 1.0.0
+description: "Windows Toast notification for approval requests, errors, and turn completion"
+author: Henry
+kind: backend

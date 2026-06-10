@@ -5,13 +5,22 @@ Sends Windows Toast notifications when:
 1. Agent needs command approval (pre_approval_request)
 2. A tool call fails (post_tool_call with error)
 3. Agent finishes a turn and terminal is NOT in foreground (transform_llm_output)
+
+Clicking any notification brings the terminal window to foreground.
 """
 
 import logging
+import os
 import threading
+from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# Path to the focus_terminal.ps1 script (same directory as this file)
+_SCRIPT_DIR = Path(__file__).parent
+_FOCUS_SCRIPT = _SCRIPT_DIR / "focus_terminal.ps1"
+_FOCUS_URL = f"file:///{_FOCUS_SCRIPT.as_posix()}" if _FOCUS_SCRIPT.exists() else ""
 
 # ---------------------------------------------------------------------------
 # Foreground window detection
@@ -23,7 +32,7 @@ _TERMINAL_KEYWORDS = [
     "cmd",
     "mintty",
     "git-bash",
-    "visual studio code",  # VS Code integrated terminal
+    "visual studio code",
     "hermes",
     "pycharm",
     "intellij",
@@ -39,11 +48,10 @@ try:
             title = win32gui.GetWindowText(hwnd).lower()
             return any(kw in title for kw in _TERMINAL_KEYWORDS)
         except Exception:
-            # If detection fails, assume terminal IS foreground (don't notify)
             return True
 
 except ImportError:
-    logger.warning("win32gui not available — foreground detection disabled, notifications will always show")
+    logger.warning("win32gui not available — foreground detection disabled")
 
     def _is_terminal_foreground() -> bool:
         return False
@@ -54,7 +62,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 try:
-    from winotify import Notification, audio
+    from winotify import Notification
 
     def _show_toast(title: str, body: str, msg_type: str = "info") -> None:
         """Show a Windows Toast notification in a background thread."""
@@ -65,13 +73,12 @@ try:
                     title=title,
                     msg=body,
                     duration="long",
+                    launch=_FOCUS_URL,
                 )
-                # No audio — just show the toast
                 toast.show()
             except Exception as e:
                 logger.error("Failed to show toast: %s", e)
 
-        # Fire in background thread to avoid blocking the agent
         threading.Thread(target=_fire, daemon=True).start()
 
 except ImportError:
@@ -90,7 +97,6 @@ def _on_pre_approval_request(**kwargs: Any) -> None:
     command = kwargs.get("command", "")
     description = kwargs.get("description", "")
     body = command[:200] if command else description[:200]
-    print(f"[win_notify] PRE_APPROVAL hook fired! command={command[:50]}")  # DEBUG
     _show_toast(
         title="\U0001f514 Hermes \u9700\u8981\u5ba1\u6279",
         body=body,
@@ -106,7 +112,6 @@ def _on_post_tool_call(**kwargs: Any) -> None:
 
     tool_name = kwargs.get("tool_name", "unknown")
     error_msg = kwargs.get("error_message", "") or kwargs.get("result", "")
-    # Truncate long error messages
     body = f"{tool_name}: {str(error_msg)[:150]}" if error_msg else tool_name
 
     _show_toast(
@@ -128,7 +133,7 @@ def _on_transform_llm_output(**kwargs: Any) -> Optional[str]:
             body="\u56de\u5230\u7ec8\u7aef\u67e5\u770b\u7ed3\u679c",
             msg_type="complete",
         )
-    return None  # Don't transform the output
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -141,3 +146,7 @@ def register(ctx: Any) -> None:
     ctx.register_hook("post_tool_call", _on_post_tool_call)
     ctx.register_hook("transform_llm_output", _on_transform_llm_output)
     logger.info("win_notify plugin registered: approval + error + completion notifications")
+    if _FOCUS_URL:
+        logger.info("win_notify: click-to-focus enabled via %s", _FOCUS_SCRIPT)
+    else:
+        logger.warning("win_notify: focus script not found at %s", _FOCUS_SCRIPT)

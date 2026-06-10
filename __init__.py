@@ -66,13 +66,8 @@ try:
                     msg=body,
                     duration="long",
                 )
-                # Set audio based on notification type
-                if msg_type == "approval":
-                    toast.set_audio(audio.LoopingAlarm, loop=False)
-                elif msg_type == "error":
-                    toast.set_audio(audio.LoopingAlarm2, loop=False)
-                else:
-                    toast.set_audio(audio.Default, loop=False)
+                # Silent — no audio per user preference
+                toast.set_audio(audio.Silent, loop=False)
                 toast.show()
             except Exception as e:
                 logger.error("Failed to show toast: %s", e)

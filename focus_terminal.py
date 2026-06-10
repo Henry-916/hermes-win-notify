@@ -156,7 +156,7 @@ def main():
             action = "focus"
 
     # Handle approval actions
-    if action in ("once", "session", "always", "deny"):
+    if action in ("once", "session", "always", "deny", "dismiss"):
         write_approval_response(action)
 
     # Always focus the terminal

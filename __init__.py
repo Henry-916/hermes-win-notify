@@ -74,7 +74,6 @@ try:
                     title=title,
                     msg=body,
                     duration="long",
-                    launch=_FOCUS_URL,
                 )
                 toast.show()
             except Exception as e:

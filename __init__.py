@@ -76,9 +76,6 @@ try:
                     duration="long",
                     launch=_FOCUS_URL,
                 )
-                # Add a "back to terminal" button
-                if _FOCUS_URL:
-                    toast.add_actions("回到终端", _FOCUS_URL)
                 toast.show()
             except Exception as e:
                 logger.error("Failed to show toast: %s", e)

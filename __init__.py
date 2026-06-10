@@ -85,7 +85,6 @@ try:
                     title="\U0001f514 Hermes \u9700\u8981\u5ba1\u6279",
                     msg=body,
                     duration="long",
-                    launch=_FOCUS_URL,
                 )
                 toast.add_actions("Once", "hermes://once")
                 toast.add_actions("Session", "hermes://session")

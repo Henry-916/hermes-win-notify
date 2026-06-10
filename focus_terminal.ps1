@@ -5,6 +5,7 @@ Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
+using System.Text;
 
 public class WindowFocus {
     [DllImport("user32.dll")]
@@ -26,61 +27,60 @@ public class WindowFocus {
     public static extern bool IsWindowVisible(IntPtr hWnd);
     
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
     
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     
-    static string[] terminalNames = {"windowsterminal", "wt", "powershell", "cmd", "mintty", "bash"};
+    static uint _selfPid = 0;
     
-    public static void FocusAnyTerminal() {
-        EnumWindows((hWnd, lParam) => {
+    public static void FocusHermesWindow() {
+        _selfPid = (uint)Process.GetCurrentProcess().Id;
+        
+        // First pass: look for windows with "hermes" in title
+        bool found = EnumWindows((hWnd, lParam) => {
             if (!IsWindowVisible(hWnd)) return true;
-            var sb = new System.Text.StringBuilder(256);
+            
+            // Skip our own window
+            uint pid;
+            GetWindowThreadProcessId(hWnd, out pid);
+            if (pid == _selfPid) return true;
+            
+            var sb = new StringBuilder(256);
             GetWindowText(hWnd, sb, 256);
             string title = sb.ToString().ToLower();
-            foreach (var name in terminalNames) {
-                if (title.Contains(name)) {
-                    if (IsIconic(hWnd)) {
-                        ShowWindow(hWnd, 9); // SW_RESTORE
-                    }
-                    SetForegroundWindow(hWnd);
-                    return false; // stop enumeration
-                }
-            }
-            return true;
-        }, IntPtr.Zero);
-    }
-    
-    public static void FocusByPid(uint pid) {
-        EnumWindows((hWnd, lParam) => {
-            uint windowPid;
-            GetWindowThreadProcessId(hWnd, out windowPid);
-            if (windowPid == pid && IsWindowVisible(hWnd)) {
-                if (IsIconic(hWnd)) {
-                    ShowWindow(hWnd, 9);
-                }
+            
+            if (title.Contains("hermes") || title.Contains("hermes agent")) {
+                if (IsIconic(hWnd)) ShowWindow(hWnd, 9);
                 SetForegroundWindow(hWnd);
-                return false;
+                return false; // stop
             }
             return true;
         }, IntPtr.Zero);
+        
+        // Fallback: find any terminal window (excluding self)
+        if (!found) {
+            string[] names = {"windowsterminal", "powershell", "cmd", "mintty", "bash"};
+            EnumWindows((hWnd, lParam) => {
+                if (!IsWindowVisible(hWnd)) return true;
+                uint pid;
+                GetWindowThreadProcessId(hWnd, out pid);
+                if (pid == _selfPid) return true;
+                
+                var sb = new StringBuilder(256);
+                GetWindowText(hWnd, sb, 256);
+                string title = sb.ToString().ToLower();
+                foreach (var name in names) {
+                    if (title.Contains(name)) {
+                        if (IsIconic(hWnd)) ShowWindow(hWnd, 9);
+                        SetForegroundWindow(hWnd);
+                        return false;
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+        }
     }
 }
 "@
 
-# Try to focus terminal by process tree first, then fallback to any terminal
-try {
-    # Get parent process chain: this script -> powershell -> hermes -> terminal
-    $ppid = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId
-    $grandparent = (Get-CimInstance Win32_Process -Filter "ProcessId = $ppid").ParentProcessId
-    
-    # Try grandparent (likely the terminal)
-    [WindowFocus]::FocusByPid([uint32]$grandparent)
-    
-    # If that didn't work, try parent
-    Start-Sleep -Milliseconds 100
-    [WindowFocus]::FocusByPid([uint32]$ppid)
-} catch {
-    # Fallback: find any terminal window
-    [WindowFocus]::FocusAnyTerminal()
-}
+[WindowFocus]::FocusHermesWindow()

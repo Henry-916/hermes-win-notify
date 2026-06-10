@@ -183,23 +183,6 @@ def _on_pre_approval_request(**kwargs: Any) -> None:
     )
 
 
-def _on_post_tool_call(**kwargs: Any) -> None:
-    """Fired after a tool call. Notify only on errors."""
-    status = kwargs.get("status", "")
-    if status != "error":
-        return
-
-    tool_name = kwargs.get("tool_name", "unknown")
-    error_msg = kwargs.get("error_message", "") or kwargs.get("result", "")
-    body = f"{tool_name}: {str(error_msg)[:150]}" if error_msg else tool_name
-
-    _show_toast(
-        title="\u274c Hermes \u9047\u5230\u9519\u8bef",
-        body=body,
-        msg_type="error",
-    )
-
-
 def _on_transform_llm_output(**kwargs: Any) -> Optional[str]:
     """Fired when LLM produces final text output (= turn ends).
 
@@ -222,7 +205,6 @@ def _on_transform_llm_output(**kwargs: Any) -> Optional[str]:
 def register(ctx: Any) -> None:
     """Register notification hooks with Hermes."""
     ctx.register_hook("pre_approval_request", _on_pre_approval_request)
-    ctx.register_hook("post_tool_call", _on_post_tool_call)
     ctx.register_hook("transform_llm_output", _on_transform_llm_output)
     logger.info("win_notify plugin registered: approval + error + completion notifications")
 

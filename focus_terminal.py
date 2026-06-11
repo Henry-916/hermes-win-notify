@@ -20,6 +20,16 @@ user32 = ctypes.windll.user32
 script_dir = Path(__file__).parent
 pid_file = script_dir / "hermes_pid.txt"
 response_file = script_dir / "approval_response.txt"
+log_file = script_dir / "focus_debug.log"
+
+
+def log(msg: str):
+    """Append debug message to log file."""
+    try:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"{msg}\n")
+    except Exception:
+        pass
 
 
 def focus_by_hwnd(hwnd: int) -> bool:
@@ -30,17 +40,25 @@ def focus_by_hwnd(hwnd: int) -> bool:
     attach to the foreground thread's input queue first.
     """
     if not hwnd or not user32.IsWindow(hwnd):
+        log(f"focus_by_hwnd: invalid hwnd={hwnd}")
         return False
     if not user32.IsWindowVisible(hwnd):
+        log(f"focus_by_hwnd: hwnd={hwnd} not visible")
         return False
+
+    title_buf = ctypes.create_unicode_buffer(256)
+    user32.GetWindowTextW(hwnd, title_buf, 256)
+    log(f"focus_by_hwnd: targeting hwnd={hwnd}, title=[{title_buf.value[:50]}]")
 
     # Get current foreground thread
     fg_hwnd = user32.GetForegroundWindow()
     fg_thread = user32.GetWindowThreadProcessId(fg_hwnd, None)
     target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+    log(f"  fg_hwnd={fg_hwnd}, fg_thread={fg_thread}, target_thread={target_thread}")
 
     # Attach to foreground thread input (required for SetForegroundWindow to work)
-    user32.AttachThreadInput(target_thread, fg_thread, True)
+    attach_result = user32.AttachThreadInput(target_thread, fg_thread, True)
+    log(f"  AttachThreadInput result={attach_result}")
 
     # Bring window to top
     user32.BringWindowToTop(hwnd)
@@ -50,10 +68,18 @@ def focus_by_hwnd(hwnd: int) -> bool:
         user32.ShowWindow(hwnd, 9)  # SW_RESTORE
 
     # Set foreground
-    user32.SetForegroundWindow(hwnd)
+    sf_result = user32.SetForegroundWindow(hwnd)
+    log(f"  SetForegroundWindow result={sf_result}")
 
     # Detach thread input
     user32.AttachThreadInput(target_thread, fg_thread, False)
+
+    # Verify
+    time.sleep(0.2)
+    new_fg = user32.GetForegroundWindow()
+    new_fg_title = ctypes.create_unicode_buffer(256)
+    user32.GetWindowTextW(new_fg, new_fg_title, 256)
+    log(f"  Verify: new_fg={new_fg}, title=[{new_fg_title.value[:50]}]")
 
     return True
 
@@ -144,14 +170,18 @@ def focus_terminal(hwnd: int = 0):
     If hwnd is provided and valid, use it directly (most precise).
     Otherwise fall back to PID-based lookup, then to any terminal.
     """
+    log(f"focus_terminal called with hwnd={hwnd}")
+
     # 1. Try HWND directly (most precise, multi-window safe)
     if hwnd and focus_by_hwnd(hwnd):
+        log("focus_terminal: HWND focus succeeded")
         return
 
     # 2. Try PID-based lookup
     if pid_file.exists():
         try:
             hermes_pid = int(pid_file.read_text().strip())
+            log(f"focus_terminal: trying PID={hermes_pid}")
         except (ValueError, OSError):
             hermes_pid = 0
 
@@ -159,6 +189,7 @@ def focus_terminal(hwnd: int = 0):
             pid = hermes_pid
             for _ in range(10):
                 if focus_by_pid(pid):
+                    log("focus_terminal: PID focus succeeded")
                     return
                 parent = get_parent_pid(pid)
                 if parent == 0 or parent == pid:
@@ -166,6 +197,7 @@ def focus_terminal(hwnd: int = 0):
                 pid = parent
 
     # 3. Fallback: any terminal
+    log("focus_terminal: falling back to any terminal")
     focus_any_terminal()
 
 
@@ -190,6 +222,7 @@ def parse_url_and_act(url: str):
       hermes://dismiss         → dismiss, show terminal approval
       hermes://dismiss/12345   → dismiss, focus specific window + show approval
     """
+    log(f"parse_url_and_act: url=[{url}]")
     url_lower = url.lower()
     hwnd = 0
 
@@ -204,6 +237,8 @@ def parse_url_and_act(url: str):
             hwnd = int(parts[1])
         except ValueError:
             hwnd = 0
+
+    log(f"  action={action}, hwnd={hwnd}")
 
     # Handle approval actions — write response, no terminal jump
     if action in ("once", "session", "always", "deny"):
@@ -221,11 +256,13 @@ def parse_url_and_act(url: str):
 
 
 def main():
+    log(f"--- focus_terminal.py started, argv={sys.argv} ---")
     if len(sys.argv) > 1:
         url = sys.argv[1]
         parse_url_and_act(url)
     else:
         focus_terminal()
+    log("--- focus_terminal.py done ---")
 
 
 if __name__ == "__main__":

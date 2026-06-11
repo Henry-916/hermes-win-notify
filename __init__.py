@@ -44,18 +44,23 @@ try:
         Falls back to title-based detection if HWND is not available.
         """
         try:
+            # Validate cached HWND is still alive
+            global _TERMINAL_HWND
+            if _TERMINAL_HWND and not win32gui.IsWindow(_TERMINAL_HWND):
+                _TERMINAL_HWND = 0  # Window destroyed, invalidate cache
+
             fg_hwnd = win32gui.GetForegroundWindow()
 
             # Fast: compare foreground HWND with cached terminal HWND
             if _TERMINAL_HWND and fg_hwnd == _TERMINAL_HWND:
                 return True
 
-            # Fallback: title-based detection
+            # Fallback: title-based detection (less reliable in multi-session)
             title = win32gui.GetWindowText(fg_hwnd).lower()
             keywords = ["powershell", "windowsterminal", "cmd", "mintty", "bash", "hermes"]
             return any(kw in title for kw in keywords)
         except Exception:
-            return True
+            return False  # On error, assume NOT foreground → show notification
 
     def _get_terminal_hwnd() -> int:
         """Return the cached terminal HWND captured at register() time.
@@ -347,7 +352,15 @@ def _on_transform_llm_output(**kwargs: Any) -> Optional[str]:
     Only sends notification if terminal is NOT in foreground.
     Returns None (no transformation to the output).
     """
-    if not _is_terminal_foreground():
+    is_fg = _is_terminal_foreground()
+    fg_hwnd = 0
+    try:
+        fg_hwnd = win32gui.GetForegroundWindow()
+    except Exception:
+        pass
+    logger.info("win_notify completion: is_fg=%s, fg_hwnd=%s, cached_hwnd=%s", is_fg, fg_hwnd, _TERMINAL_HWND)
+    if not is_fg:
+        logger.info("win_notify: terminal NOT in foreground, showing completion notification")
         _show_toast(
             title="\u2705 Hermes \u4efb\u52a1\u5b8c\u6210",
             body="\u56de\u5230\u7ec8\u7aef\u67e5\u770b\u7ed3\u679c",

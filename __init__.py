@@ -332,9 +332,12 @@ def _plugin_approval_handler(command: str, description: str, timeout: int) -> Op
 def _on_pre_approval_request(**kwargs: Any) -> None:
     """Fired when a dangerous command needs user approval."""
     # Don't show the simple notification if plugin approval handler is active
-    from tools.approval import _plugin_approval_handler as handler
-    if handler is not None:
-        return
+    try:
+        from tools.approval import _plugin_approval_handler as handler
+        if handler is not None:
+            return
+    except (ImportError, AttributeError):
+        pass  # Fall through to show simple notification
 
     command = kwargs.get("command", "")
     description = kwargs.get("description", "")

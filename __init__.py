@@ -42,8 +42,10 @@ try:
 
     # Terminal window keywords (title-based detection)
     _TERMINAL_KEYWORDS = ["powershell", "windowsterminal", "cmd", "mintty", "bash", "hermes"]
-    # TUI title format: "⏳ name · model · path" — check for "·" + common model names
-    _TUI_MARKERS = ["·", "mimo", "claude", "deepseek"]
+    # TUI title format: "⏳ name · model · path" — check for "·" combined with model names
+    # Must have "·" AND a model name to avoid false positives on browser tabs
+    import re
+    _TUI_PATTERN = re.compile(r"·\s*(mimo|claude|deepseek|gpt|gemini)", re.IGNORECASE)
 
     def _is_terminal_foreground() -> bool:
         """Check if a terminal window is currently in the foreground.
@@ -69,7 +71,7 @@ try:
             if any(kw in title for kw in _TERMINAL_KEYWORDS):
                 return True
             # Check TUI format (e.g. "✓ name · mimo-v2.5 · c:\users\...")
-            if any(m in title for m in _TUI_MARKERS):
+            if _TUI_PATTERN.search(title):
                 return True
             return False
         except Exception:
@@ -96,7 +98,7 @@ try:
             # 1. Fast path: terminal in foreground (typical at startup)
             fg_hwnd = win32gui.GetForegroundWindow()
             title = win32gui.GetWindowText(fg_hwnd).lower()
-            if any(kw in title for kw in _TERMINAL_KEYWORDS) or any(m in title for m in _TUI_MARKERS):
+            if any(kw in title for kw in _TERMINAL_KEYWORDS) or _TUI_PATTERN.search(title):
                 logger.info("win_notify capture: fast path hit, hwnd=%d, title=[%s]", fg_hwnd, title[:60])
                 return fg_hwnd
 

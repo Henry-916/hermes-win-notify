@@ -1,0 +1,12 @@
+argv: ['C:\\Users\\24701\\AppData\\Local\\hermes\\plugins\\win_notify\\debug_args.py', 'hermes://focus/2427826']
+argv[1] if exists: hermes://focus/2427826
+---
+argv: ['C:\\Users\\24701\\AppData\\Local\\hermes\\plugins\\win_notify\\debug_args.py', 'hermes://dismiss/3410590']
+argv[1] if exists: hermes://dismiss/3410590
+---
+argv: ['C:\\Users\\24701\\AppData\\Local\\hermes\\plugins\\win_notify\\debug_args.py', 'hermes://dismiss/2427826']
+argv[1] if exists: hermes://dismiss/2427826
+---
+argv: ['C:\\Users\\24701\\AppData\\Local\\hermes\\plugins\\win_notify\\debug_args.py', 'hermes://dismiss/328094']
+argv[1] if exists: hermes://dismiss/328094
+---

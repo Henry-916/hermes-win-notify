@@ -137,7 +137,16 @@ def _plugin_approval_handler(command: str, description: str, timeout: int) -> Op
     Returns 'once', 'session', 'always', 'deny', or None (timeout/no response).
     """
     # If terminal is in foreground, skip toast and let terminal handle it
-    if _is_terminal_foreground():
+    fg_title = ""
+    try:
+        import win32gui
+        fg_hwnd = win32gui.GetForegroundWindow()
+        fg_title = win32gui.GetWindowText(fg_hwnd)
+    except Exception:
+        pass
+    is_fg = _is_terminal_foreground()
+    logger.info("win_notify handler: is_foreground=%s, title=[%s]", is_fg, fg_title[:60])
+    if is_fg:
         return None
 
     # Clean up any stale response file

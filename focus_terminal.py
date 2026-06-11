@@ -11,6 +11,7 @@ Handles:
 """
 import ctypes
 import sys
+import time
 from pathlib import Path
 
 user32 = ctypes.windll.user32
@@ -22,12 +23,38 @@ response_file = script_dir / "approval_response.txt"
 
 
 def focus_by_hwnd(hwnd: int) -> bool:
-    """Focus a specific window by its handle."""
+    """Focus a specific window by its handle.
+
+    Uses AttachThreadInput + BringWindowToTop for reliable focus switching.
+    Windows restricts SetForegroundWindow from background processes, so we
+    attach to the foreground thread's input queue first.
+    """
+    if not hwnd or not user32.IsWindow(hwnd):
+        return False
     if not user32.IsWindowVisible(hwnd):
         return False
+
+    # Get current foreground thread
+    fg_hwnd = user32.GetForegroundWindow()
+    fg_thread = user32.GetWindowThreadProcessId(fg_hwnd, None)
+    target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+
+    # Attach to foreground thread input (required for SetForegroundWindow to work)
+    user32.AttachThreadInput(target_thread, fg_thread, True)
+
+    # Bring window to top
+    user32.BringWindowToTop(hwnd)
+
+    # Restore if minimized
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+
+    # Set foreground
     user32.SetForegroundWindow(hwnd)
+
+    # Detach thread input
+    user32.AttachThreadInput(target_thread, fg_thread, False)
+
     return True
 
 
@@ -41,10 +68,7 @@ def focus_by_pid(target_pid: int) -> bool:
         pid = ctypes.c_uint()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if pid.value == target_pid and user32.IsWindowVisible(hwnd):
-            if user32.IsIconic(hwnd):
-                user32.ShowWindow(hwnd, 9)
-            user32.SetForegroundWindow(hwnd)
-            result[0] = True
+            result[0] = focus_by_hwnd(hwnd)
             return False  # stop
         return True
 
@@ -68,10 +92,8 @@ def focus_any_terminal():
             title = buf.value.lower().encode("utf-8")
             for name in names:
                 if name in title:
-                    if user32.IsIconic(hwnd):
-                        user32.ShowWindow(hwnd, 9)
-                    user32.SetForegroundWindow(hwnd)
-                    return False
+                    if focus_by_hwnd(hwnd):
+                        return False
         return True
 
     user32.EnumWindows(enum_cb, 0)

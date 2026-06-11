@@ -29,6 +29,9 @@ _APPROVAL_RESPONSE_FILE = _SCRIPT_DIR / "approval_response.txt"
 # 0 means "not yet captured" or "capture failed".
 _TERMINAL_HWND: int = 0
 
+# Cached conversation name — extracted from window title at register() time.
+_CONVERSATION_NAME: str = ""
+
 # ---------------------------------------------------------------------------
 # Foreground window detection + HWND capture
 # ---------------------------------------------------------------------------
@@ -96,6 +99,30 @@ try:
             return _find_hermes_window()
         except Exception:
             return 0
+
+    def _extract_conversation_name(hwnd: int) -> str:
+        """Extract the conversation name from the terminal window title.
+
+        TUI title format: '⏳ conversation_name · model · path'
+        CLI title format: 'Hermes Agent' or 'PowerShell' etc.
+        Returns the conversation name, or empty string if not found.
+        """
+        try:
+            if not hwnd or not win32gui.IsWindow(hwnd):
+                return ""
+            title = win32gui.GetWindowText(hwnd)
+            # TUI format: "⏳ name · model · path"
+            if "·" in title:
+                parts = title.split("·")
+                name = parts[0].strip()
+                # Remove leading emoji (⏳)
+                name = name.lstrip("⏳ ").strip()
+                if name:
+                    return name
+            # CLI format or unknown
+            return ""
+        except Exception:
+            return ""
 
     def _find_hwnd_by_process_tree(start_pid: int) -> int:
         """Walk the parent process chain from start_pid and return the HWND
@@ -242,7 +269,7 @@ try:
                 body = command[:200] if command else description[:200]
                 toast = Notification(
                     app_id="Hermes Agent",
-                    title="\U0001f514 Hermes \u9700\u8981\u5ba1\u6279",
+                    title=f"\U0001f514 {_notification_prefix()}Hermes \u9700\u8981\u5ba1\u6279",
                     msg=body,
                     duration="long",
                     launch=f"hermes://dismiss/{hwnd}",
@@ -329,6 +356,13 @@ def _plugin_approval_handler(command: str, description: str, timeout: int) -> Op
 # Hook callbacks
 # ---------------------------------------------------------------------------
 
+def _notification_prefix() -> str:
+    """Build a prefix for notification titles with the conversation name."""
+    if _CONVERSATION_NAME:
+        return f"[{_CONVERSATION_NAME}] "
+    return ""
+
+
 def _on_pre_approval_request(**kwargs: Any) -> None:
     """Fired when a dangerous command needs user approval."""
     # Don't show the simple notification if plugin approval handler is active
@@ -343,7 +377,7 @@ def _on_pre_approval_request(**kwargs: Any) -> None:
     description = kwargs.get("description", "")
     body = command[:200] if command else description[:200]
     _show_toast(
-        title="\U0001f514 Hermes \u9700\u8981\u5ba1\u6279",
+        title=f"\U0001f514 {_notification_prefix()}Hermes \u9700\u8981\u5ba1\u6279",
         body=body,
         msg_type="approval",
     )
@@ -365,7 +399,7 @@ def _on_transform_llm_output(**kwargs: Any) -> Optional[str]:
     if not is_fg:
         logger.info("win_notify: terminal NOT in foreground, showing completion notification")
         _show_toast(
-            title="\u2705 Hermes \u4efb\u52a1\u5b8c\u6210",
+            title=f"\u2705 {_notification_prefix()}Hermes \u4efb\u52a1\u5b8c\u6210",
             body="\u56de\u5230\u7ec8\u7aef\u67e5\u770b\u7ed3\u679c",
             msg_type="complete",
         )
@@ -387,6 +421,12 @@ def register(ctx: Any) -> None:
     global _TERMINAL_HWND
     _TERMINAL_HWND = _capture_terminal_hwnd()
     logger.info("win_notify: captured terminal HWND = %d", _TERMINAL_HWND)
+
+    # Capture conversation name from window title
+    global _CONVERSATION_NAME
+    _CONVERSATION_NAME = _extract_conversation_name(_TERMINAL_HWND)
+    if _CONVERSATION_NAME:
+        logger.info("win_notify: conversation name = '%s'", _CONVERSATION_NAME)
 
     # Write current process PID for the focus script (backward compat)
     try:

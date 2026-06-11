@@ -205,16 +205,19 @@ def parse_url_and_act(url: str):
         except ValueError:
             hwnd = 0
 
-    # Handle approval actions
+    # Handle approval actions — write response, no terminal jump
     if action in ("once", "session", "always", "deny"):
         write_approval_response(action)
-        focus_terminal(hwnd)
-    elif action == "dismiss":
+        return  # Don't focus terminal — let Hermes handle it
+
+    # Dismiss — write response AND focus terminal
+    if action == "dismiss":
         write_approval_response("dismiss")
         focus_terminal(hwnd)
-    else:
-        # Default: just focus
-        focus_terminal(hwnd)
+        return
+
+    # Default: just focus
+    focus_terminal(hwnd)
 
 
 def main():

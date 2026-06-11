@@ -3,3 +3,6 @@ __pycache__/
 hermes_pid.txt
 approval_response.txt
 approval_request.txt
+debug_args.py
+debug_args.txt
+focus_debug.log

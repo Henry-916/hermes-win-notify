@@ -88,16 +88,27 @@ try:
             title = win32gui.GetWindowText(fg_hwnd).lower()
             keywords = ["powershell", "windowsterminal", "cmd", "mintty", "bash", "hermes"]
             if any(kw in title for kw in keywords):
+                logger.info("win_notify capture: fast path hit, hwnd=%d, title=[%s]", fg_hwnd, title[:60])
                 return fg_hwnd
 
             # 2. Walk parent process tree to find terminal window
+            logger.info("win_notify capture: fast path missed, fg_title=[%s], trying process tree", title[:60])
             result = _find_hwnd_by_process_tree(os.getpid())
             if result:
+                result_title = win32gui.GetWindowText(result)
+                logger.info("win_notify capture: process tree found hwnd=%d, title=[%s]", result, result_title[:60])
                 return result
 
             # 3. Fallback: any window with 'hermes' in title
-            return _find_hermes_window()
-        except Exception:
+            result = _find_hermes_window()
+            if result:
+                result_title = win32gui.GetWindowText(result)
+                logger.info("win_notify capture: fallback found hwnd=%d, title=[%s]", result, result_title[:60])
+            else:
+                logger.warning("win_notify capture: all strategies failed, hwnd=0")
+            return result
+        except Exception as e:
+            logger.warning("win_notify capture: exception: %s", e)
             return 0
 
     def _extract_conversation_name(hwnd: int) -> str:
@@ -251,9 +262,10 @@ try:
 
         def _fire():
             try:
+                title_display = f"[{_CONVERSATION_NAME}] " + title if _CONVERSATION_NAME else title
                 toast = Notification(
                     app_id="Hermes Agent",
-                    title=title,
+                    title=title_display,
                     msg=body,
                     duration="long",
                     launch=_focus_url(hwnd),

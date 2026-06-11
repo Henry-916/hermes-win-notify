@@ -40,6 +40,11 @@ try:
     import win32gui
     import ctypes
 
+    # Terminal window keywords (title-based detection)
+    _TERMINAL_KEYWORDS = ["powershell", "windowsterminal", "cmd", "mintty", "bash", "hermes"]
+    # TUI title format: "⏳ name · model · path" — check for "·" + common model names
+    _TUI_MARKERS = ["·", "mimo", "claude", "deepseek"]
+
     def _is_terminal_foreground() -> bool:
         """Check if a terminal window is currently in the foreground.
 
@@ -58,10 +63,15 @@ try:
             if _TERMINAL_HWND and fg_hwnd == _TERMINAL_HWND:
                 return True
 
-            # Fallback: title-based detection (less reliable in multi-session)
+            # Fallback: title-based detection
             title = win32gui.GetWindowText(fg_hwnd).lower()
-            keywords = ["powershell", "windowsterminal", "cmd", "mintty", "bash", "hermes"]
-            return any(kw in title for kw in keywords)
+            # Check standard terminal keywords
+            if any(kw in title for kw in _TERMINAL_KEYWORDS):
+                return True
+            # Check TUI format (e.g. "✓ name · mimo-v2.5 · c:\users\...")
+            if any(m in title for m in _TUI_MARKERS):
+                return True
+            return False
         except Exception:
             return False  # On error, assume NOT foreground → show notification
 
@@ -86,8 +96,7 @@ try:
             # 1. Fast path: terminal in foreground (typical at startup)
             fg_hwnd = win32gui.GetForegroundWindow()
             title = win32gui.GetWindowText(fg_hwnd).lower()
-            keywords = ["powershell", "windowsterminal", "cmd", "mintty", "bash", "hermes"]
-            if any(kw in title for kw in keywords):
+            if any(kw in title for kw in _TERMINAL_KEYWORDS) or any(m in title for m in _TUI_MARKERS):
                 logger.info("win_notify capture: fast path hit, hwnd=%d, title=[%s]", fg_hwnd, title[:60])
                 return fg_hwnd
 

@@ -2,11 +2,12 @@
 
 Called via hermes:// protocol handler. Uses pythonw.exe (no window).
 Handles:
-  hermes://focus     → bring terminal to foreground
-  hermes://once      → approve once + bring terminal to foreground
-  hermes://session   → approve for session + bring terminal to foreground
-  hermes://always    → approve permanently + bring terminal to foreground
-  hermes://deny      → deny command + bring terminal to foreground
+  hermes://focus[/hwnd]     → bring terminal to foreground (optionally by HWND)
+  hermes://once             → approve once
+  hermes://session          → approve for session
+  hermes://always           → approve permanently
+  hermes://deny             → deny command
+  hermes://dismiss[/hwnd]   → dismiss notification, show terminal approval
 """
 import ctypes
 import sys
@@ -20,7 +21,17 @@ pid_file = script_dir / "hermes_pid.txt"
 response_file = script_dir / "approval_response.txt"
 
 
-def focus_by_pid(target_pid):
+def focus_by_hwnd(hwnd: int) -> bool:
+    """Focus a specific window by its handle."""
+    if not user32.IsWindowVisible(hwnd):
+        return False
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    user32.SetForegroundWindow(hwnd)
+    return True
+
+
+def focus_by_pid(target_pid: int) -> bool:
     """Find and focus the window owned by target_pid."""
     WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
     result = [False]
@@ -31,7 +42,7 @@ def focus_by_pid(target_pid):
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if pid.value == target_pid and user32.IsWindowVisible(hwnd):
             if user32.IsIconic(hwnd):
-                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                user32.ShowWindow(hwnd, 9)
             user32.SetForegroundWindow(hwnd)
             result[0] = True
             return False  # stop
@@ -66,7 +77,7 @@ def focus_any_terminal():
     user32.EnumWindows(enum_cb, 0)
 
 
-def get_parent_pid(pid):
+def get_parent_pid(pid: int) -> int:
     """Get parent process ID using CreateToolhelp32Snapshot."""
     TH32CS_SNAPPROCESS = 0x00000002
 
@@ -105,8 +116,17 @@ def get_parent_pid(pid):
     return parent
 
 
-def focus_terminal():
-    """Focus the Hermes terminal window."""
+def focus_terminal(hwnd: int = 0):
+    """Focus the Hermes terminal window.
+
+    If hwnd is provided and valid, use it directly (most precise).
+    Otherwise fall back to PID-based lookup, then to any terminal.
+    """
+    # 1. Try HWND directly (most precise, multi-window safe)
+    if hwnd and focus_by_hwnd(hwnd):
+        return
+
+    # 2. Try PID-based lookup
     if pid_file.exists():
         try:
             hermes_pid = int(pid_file.read_text().strip())
@@ -123,7 +143,7 @@ def focus_terminal():
                     break
                 pid = parent
 
-    # Fallback
+    # 3. Fallback: any terminal
     focus_any_terminal()
 
 
@@ -135,32 +155,52 @@ def write_approval_response(choice: str):
         pass
 
 
-def main():
-    # Parse the action from command line or sys.argv
-    # When launched via hermes://once, Windows passes "hermes://once" as argv[1]
-    action = "focus"  # default
+def parse_url_and_act(url: str):
+    """Parse hermes:// URL and perform the appropriate action.
 
-    if len(sys.argv) > 1:
-        arg = sys.argv[1].lower()
-        if "once" in arg:
-            action = "once"
-        elif "session" in arg:
-            action = "session"
-        elif "always" in arg:
-            action = "always"
-        elif "deny" in arg:
-            action = "deny"
-        elif "dismiss" in arg:
-            action = "dismiss"
-        else:
-            action = "focus"
+    Supported URLs:
+      hermes://focus           → focus terminal (PID fallback)
+      hermes://focus/12345     → focus specific window by HWND
+      hermes://once            → approve once
+      hermes://session         → approve for session
+      hermes://always          → approve permanently
+      hermes://deny            → deny command
+      hermes://dismiss         → dismiss, show terminal approval
+      hermes://dismiss/12345   → dismiss, focus specific window + show approval
+    """
+    url_lower = url.lower()
+    hwnd = 0
+
+    # Extract action and optional HWND
+    # Format: hermes://action[/hwnd]
+    parts = url_lower.replace("hermes://", "").split("/")
+    action = parts[0] if parts else "focus"
+
+    # Try to extract HWND from URL
+    if len(parts) > 1:
+        try:
+            hwnd = int(parts[1])
+        except ValueError:
+            hwnd = 0
 
     # Handle approval actions
-    if action in ("once", "session", "always", "deny", "dismiss"):
+    if action in ("once", "session", "always", "deny"):
         write_approval_response(action)
+        focus_terminal(hwnd)
+    elif action == "dismiss":
+        write_approval_response("dismiss")
+        focus_terminal(hwnd)
+    else:
+        # Default: just focus
+        focus_terminal(hwnd)
 
-    # Always focus the terminal
-    focus_terminal()
+
+def main():
+    if len(sys.argv) > 1:
+        url = sys.argv[1]
+        parse_url_and_act(url)
+    else:
+        focus_terminal()
 
 
 if __name__ == "__main__":

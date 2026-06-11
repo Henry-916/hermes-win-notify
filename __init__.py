@@ -3,11 +3,11 @@ Hermes Plugin: Windows Toast Notifications
 
 Sends Windows Toast notifications when:
 1. Agent needs command approval (pre_approval_request)
-2. A tool call fails (post_tool_call with error)
-3. Agent finishes a turn and terminal is NOT in foreground (transform_llm_output)
+2. Agent finishes a turn and terminal is NOT in foreground (transform_llm_output)
 
 Clicking any notification brings the terminal window to foreground.
 Approval notifications have 4 buttons: once/session/always/deny.
+Multi-window safe: passes terminal HWND via URL for precise targeting.
 """
 
 import logging
@@ -21,14 +21,12 @@ logger = logging.getLogger(__name__)
 
 # Paths
 _SCRIPT_DIR = Path(__file__).parent
-_FOCUS_SCRIPT = _SCRIPT_DIR / "focus_terminal.vbs"
 _PID_FILE = _SCRIPT_DIR / "hermes_pid.txt"
 _APPROVAL_REQUEST_FILE = _SCRIPT_DIR / "approval_request.txt"
 _APPROVAL_RESPONSE_FILE = _SCRIPT_DIR / "approval_response.txt"
-_FOCUS_URL = "hermes://focus"
 
 # ---------------------------------------------------------------------------
-# Foreground window detection
+# Foreground window detection + HWND capture
 # ---------------------------------------------------------------------------
 
 try:
@@ -44,11 +42,28 @@ try:
         except Exception:
             return True
 
+    def _get_terminal_hwnd() -> int:
+        """Get the current foreground terminal window handle."""
+        try:
+            return win32gui.GetForegroundWindow()
+        except Exception:
+            return 0
+
 except ImportError:
     logger.warning("win32gui not available — foreground detection disabled")
 
     def _is_terminal_foreground() -> bool:
         return False
+
+    def _get_terminal_hwnd() -> int:
+        return 0
+
+
+def _focus_url(hwnd: int = 0) -> str:
+    """Build a hermes://focus URL with optional HWND for precise targeting."""
+    if hwnd:
+        return f"hermes://focus/{hwnd}"
+    return "hermes://focus"
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +75,8 @@ try:
 
     def _show_toast(title: str, body: str, msg_type: str = "info") -> None:
         """Show a Windows Toast notification in a background thread."""
+        hwnd = _get_terminal_hwnd()
+
         def _fire():
             try:
                 toast = Notification(
@@ -67,7 +84,7 @@ try:
                     title=title,
                     msg=body,
                     duration="long",
-                    launch=_FOCUS_URL,
+                    launch=_focus_url(hwnd),
                 )
                 toast.show()
             except Exception as e:
@@ -77,6 +94,8 @@ try:
 
     def _show_approval_toast(command: str, description: str) -> None:
         """Show approval Toast with 4 action buttons."""
+        hwnd = _get_terminal_hwnd()
+
         def _fire():
             try:
                 body = command[:200] if command else description[:200]
@@ -85,7 +104,7 @@ try:
                     title="\U0001f514 Hermes \u9700\u8981\u5ba1\u6279",
                     msg=body,
                     duration="long",
-                    launch="hermes://dismiss",
+                    launch=f"hermes://dismiss/{hwnd}",
                 )
                 toast.add_actions("Once", "hermes://once")
                 toast.add_actions("Session", "hermes://session")
@@ -136,9 +155,6 @@ def _plugin_approval_handler(command: str, description: str, timeout: int) -> Op
     # Show the Toast with buttons
     _show_approval_toast(command, description)
 
-    # Also fire the pre_approval_request hook for the simple notification
-    # (the hook-based notification is already handled by the hook system)
-
     # Wait for the response file to appear
     start = time.time()
     while time.time() - start < timeout:
@@ -175,10 +191,9 @@ def _plugin_approval_handler(command: str, description: str, timeout: int) -> Op
 def _on_pre_approval_request(**kwargs: Any) -> None:
     """Fired when a dangerous command needs user approval."""
     # Don't show the simple notification if plugin approval handler is active
-    # (the approval toast with buttons is already shown by _plugin_approval_handler)
     from tools.approval import _plugin_approval_handler as handler
     if handler is not None:
-        return  # Skip — the approval toast is already showing
+        return
 
     command = kwargs.get("command", "")
     description = kwargs.get("description", "")
@@ -213,7 +228,7 @@ def register(ctx: Any) -> None:
     """Register notification hooks with Hermes."""
     ctx.register_hook("pre_approval_request", _on_pre_approval_request)
     ctx.register_hook("transform_llm_output", _on_transform_llm_output)
-    logger.info("win_notify plugin registered: approval + error + completion notifications")
+    logger.info("win_notify plugin registered: approval + completion notifications")
 
     # Write current process PID for the focus script
     try:

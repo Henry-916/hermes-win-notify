@@ -78,11 +78,15 @@ try:
             return False  # On error, assume NOT foreground → show notification
 
     def _get_terminal_hwnd() -> int:
-        """Return the cached terminal HWND captured at register() time.
-
-        Multi-session safe: each Hermes process captures its own HWND once
-        at startup, avoiding the shared hermes_pid.txt race condition.
-        """
+        """Return the terminal HWND, re-capturing if cache is stale."""
+        global _TERMINAL_HWND
+        # Validate cached HWND is still alive
+        if _TERMINAL_HWND and not win32gui.IsWindow(_TERMINAL_HWND):
+            logger.info("win_notify: cached HWND %d is stale, re-capturing", _TERMINAL_HWND)
+            _TERMINAL_HWND = 0
+        # Re-capture if needed
+        if not _TERMINAL_HWND:
+            _TERMINAL_HWND = _capture_terminal_hwnd()
         return _TERMINAL_HWND
 
     def _capture_terminal_hwnd() -> int:

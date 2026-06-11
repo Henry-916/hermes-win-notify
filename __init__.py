@@ -98,6 +98,8 @@ try:
                 result_title = win32gui.GetWindowText(result)
                 logger.info("win_notify capture: process tree found hwnd=%d, title=[%s]", result, result_title[:60])
                 return result
+            else:
+                logger.warning("win_notify capture: process tree returned 0, falling back to title search")
 
             # 3. Fallback: any window with 'hermes' in title
             result = _find_hermes_window()
@@ -144,11 +146,13 @@ try:
         we walk up to the shell → terminal emulator to find the terminal HWND.
         """
         pid = start_pid
-        for _ in range(10):
+        for i in range(10):
             result = _find_hwnd_by_pid(pid)
+            logger.debug("win_notify capture: tree[%d] pid=%d → hwnd=%d", i, pid, result)
             if result:
                 return result
             parent = _get_parent_pid(pid)
+            logger.debug("win_notify capture: tree[%d] parent=%d", i, parent)
             if parent == 0 or parent == pid:
                 break
             pid = parent
@@ -411,7 +415,7 @@ def _on_transform_llm_output(**kwargs: Any) -> Optional[str]:
         fg_hwnd = win32gui.GetForegroundWindow()
     except Exception:
         pass
-    logger.info("win_notify completion: is_fg=%s, fg_hwnd=%s, cached_hwnd=%s", is_fg, fg_hwnd, _TERMINAL_HWND)
+    logger.debug("win_notify completion: is_fg=%s, fg_hwnd=%s, cached_hwnd=%s", is_fg, fg_hwnd, _TERMINAL_HWND)
     if not is_fg:
         logger.info("win_notify: terminal NOT in foreground, showing completion notification")
         _show_toast(

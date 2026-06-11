@@ -38,9 +38,19 @@ try:
     import ctypes
 
     def _is_terminal_foreground() -> bool:
-        """Check if a terminal window is currently in the foreground."""
+        """Check if a terminal window is currently in the foreground.
+
+        Uses the cached _TERMINAL_HWND for reliable detection in TUI mode.
+        Falls back to title-based detection if HWND is not available.
+        """
         try:
             fg_hwnd = win32gui.GetForegroundWindow()
+
+            # Fast: compare foreground HWND with cached terminal HWND
+            if _TERMINAL_HWND and fg_hwnd == _TERMINAL_HWND:
+                return True
+
+            # Fallback: title-based detection
             title = win32gui.GetWindowText(fg_hwnd).lower()
             keywords = ["powershell", "windowsterminal", "cmd", "mintty", "bash", "hermes"]
             return any(kw in title for kw in keywords)

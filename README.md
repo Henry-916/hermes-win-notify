@@ -9,6 +9,8 @@
 | 🔔 审批通知 | 危险命令需要确认 | 4 个按钮（Once/Session/Always/Deny）直接注入审批，或点击主体跳回终端审批 |
 | ✅ 完成通知 | Agent 完成回复（仅终端不在前台时） | 点击主体跳回终端 |
 
+**通知标题显示对话名称**，例如 `[hermes通知] ✅ Hermes 任务完成`，方便区分多个 session 的通知。
+
 ## 效果演示
 
 **审批通知：**
@@ -24,6 +26,7 @@
 **多窗口支持：**
 - 开多个终端窗口运行不同 session，通知精确跳转到对应的窗口
 - 启动时通过进程树缓存终端窗口句柄（HWND），不依赖共享文件
+- TUI 窗口重建后自动重新捕获 HWND
 
 ## 安装
 
@@ -114,18 +117,27 @@ hermes plugins enable win_notify
 ```
 启动时：
   register() → _capture_terminal_hwnd()
-  → 检查前台窗口是否是终端（启动时大概率是）
+  → 检查前台窗口是否是终端（TUI 格式: · mimo/claude/deepseek）
   → 不是则从 os.getpid() 向上遍历父进程树
   → 找到终端窗口 → 缓存到 _TERMINAL_HWND
 
 通知创建时：
   _get_terminal_hwnd() → 返回缓存值
+  → 如果缓存失效（窗口重建）→ 自动重新捕获
   → 编码到 URL: hermes://focus/<hwnd>
-  → 每个 session 有自己的缓存，互不干扰
 
 点击通知时：
   focus_terminal.py 解析 URL 中的 HWND
   → AttachThreadInput + BringWindowToTop 精确跳转
+```
+
+### 前台检测
+
+```
+_is_terminal_foreground() 检测策略：
+  1. HWND 比较: 前台窗口 == 缓存的终端窗口（最可靠）
+  2. 标题匹配: powershell/windowsterminal/cmd/mintty/bash/hermes
+  3. TUI 格式: 正则 ·(mimo|claude|deepseek|gpt|gemini)
 ```
 
 ### hermes:// 自定义协议
@@ -141,10 +153,10 @@ hermes plugins enable win_notify
 
 ## 已知限制
 
-1. **前台检测** — 使用窗口标题匹配（powershell/windowsterminal/cmd/hermes），可能不适用于所有终端
+1. **前台检测** — 使用 HWND 比较 + 标题匹配，在多 session 且窗口标题相同时可能误判
 2. **超时** — 审批通知默认 60 秒超时，超时后回退到终端审批
 3. **hermes update** — 需要重新运行 `patch_approval.bat` 补丁
-4. **TUI 模式** — 前台检测依赖窗口标题含 "hermes"，TUI 窗口标题默认包含
+4. **TUI 窗口重建** — HWND 会在窗口重建后失效，插件会自动重新捕获，但首次通知可能跳转失败
 
 ## 依赖
 

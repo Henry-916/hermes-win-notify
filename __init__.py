@@ -7,7 +7,7 @@ Sends Windows Toast notifications when:
 
 Clicking any notification brings the terminal window to foreground.
 Approval notifications have 4 buttons: once/session/always/deny.
-Multi-window safe: passes terminal HWND via URL for precise targeting.
+Multi-window safe: captures terminal HWND once at startup via process tree walk.
 """
 
 import logging
@@ -24,6 +24,10 @@ _SCRIPT_DIR = Path(__file__).parent
 _PID_FILE = _SCRIPT_DIR / "hermes_pid.txt"
 _APPROVAL_REQUEST_FILE = _SCRIPT_DIR / "approval_request.txt"
 _APPROVAL_RESPONSE_FILE = _SCRIPT_DIR / "approval_response.txt"
+
+# Cached terminal HWND — captured once at register() time, multi-session safe.
+# 0 means "not yet captured" or "capture failed".
+_TERMINAL_HWND: int = 0
 
 # ---------------------------------------------------------------------------
 # Foreground window detection + HWND capture
@@ -44,35 +48,95 @@ try:
             return True
 
     def _get_terminal_hwnd() -> int:
-        """Get the current terminal window handle.
+        """Return the cached terminal HWND captured at register() time.
 
-        Strategy:
-        1. Check if current foreground window is a terminal (fast path)
-        2. Find terminal window by PID from hermes_pid.txt
-        3. Search for any window with 'hermes' in title (fallback)
+        Multi-session safe: each Hermes process captures its own HWND once
+        at startup, avoiding the shared hermes_pid.txt race condition.
+        """
+        return _TERMINAL_HWND
+
+    def _capture_terminal_hwnd() -> int:
+        """Capture the terminal HWND for THIS Hermes session.
+
+        Called once at register() time when the terminal is likely foreground.
+        Strategy (multi-session safe — uses only os.getpid(), never shared files):
+        1. Fast path: if foreground window is a terminal, use it
+        2. Walk parent process tree from os.getpid(), find first visible window
+        3. Fallback: any window with 'hermes' in title
         """
         try:
-            # 1. Fast path: if terminal is in foreground, use that
+            # 1. Fast path: terminal in foreground (typical at startup)
             fg_hwnd = win32gui.GetForegroundWindow()
             title = win32gui.GetWindowText(fg_hwnd).lower()
             keywords = ["powershell", "windowsterminal", "cmd", "mintty", "bash", "hermes"]
             if any(kw in title for kw in keywords):
                 return fg_hwnd
 
-            # 2. Find by PID from hermes_pid.txt
-            if _PID_FILE.exists():
-                try:
-                    hermes_pid = int(_PID_FILE.read_text().strip())
-                    result = _find_hwnd_by_pid(hermes_pid)
-                    if result:
-                        return result
-                except (ValueError, OSError):
-                    pass
+            # 2. Walk parent process tree to find terminal window
+            result = _find_hwnd_by_process_tree(os.getpid())
+            if result:
+                return result
 
-            # 3. Fallback: search for any window with 'hermes' in title
+            # 3. Fallback: any window with 'hermes' in title
             return _find_hermes_window()
         except Exception:
             return 0
+
+    def _find_hwnd_by_process_tree(start_pid: int) -> int:
+        """Walk the parent process chain from start_pid and return the HWND
+        of the first visible window found.
+
+        In CLI mode, the Hermes Python process doesn't own visible windows;
+        we walk up to the shell → terminal emulator to find the terminal HWND.
+        """
+        pid = start_pid
+        for _ in range(10):
+            result = _find_hwnd_by_pid(pid)
+            if result:
+                return result
+            parent = _get_parent_pid(pid)
+            if parent == 0 or parent == pid:
+                break
+            pid = parent
+        return 0
+
+    def _get_parent_pid(pid: int) -> int:
+        """Get the parent process ID using CreateToolhelp32Snapshot."""
+        TH32CS_SNAPPROCESS = 0x00000002
+
+        class PROCESSENTRY32(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", ctypes.c_uint),
+                ("cntUsage", ctypes.c_uint),
+                ("th32ProcessID", ctypes.c_uint),
+                ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                ("th32ModuleID", ctypes.c_uint),
+                ("cntThreads", ctypes.c_uint),
+                ("th32ParentProcessID", ctypes.c_uint),
+                ("pcPriClassBase", ctypes.c_long),
+                ("dwFlags", ctypes.c_uint),
+                ("szExeFile", ctypes.c_char * 260),
+            ]
+
+        kernel32 = ctypes.windll.kernel32
+        snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if snapshot == -1:
+            return 0
+
+        entry = PROCESSENTRY32()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
+
+        parent = 0
+        if kernel32.Process32First(snapshot, ctypes.byref(entry)):
+            while True:
+                if entry.th32ProcessID == pid:
+                    parent = entry.th32ParentProcessID
+                    break
+                if not kernel32.Process32Next(snapshot, ctypes.byref(entry)):
+                    break
+
+        kernel32.CloseHandle(snapshot)
+        return parent
 
     def _find_hwnd_by_pid(target_pid: int) -> int:
         """Find the visible window owned by target_pid."""
@@ -115,6 +179,9 @@ except ImportError:
         return False
 
     def _get_terminal_hwnd() -> int:
+        return 0
+
+    def _capture_terminal_hwnd() -> int:
         return 0
 
 
@@ -289,7 +356,13 @@ def register(ctx: Any) -> None:
     ctx.register_hook("transform_llm_output", _on_transform_llm_output)
     logger.info("win_notify plugin registered: approval + completion notifications")
 
-    # Write current process PID for the focus script
+    # Capture terminal HWND for THIS session (before PID file — which is
+    # still written for backward compatibility with focus_terminal.py fallback)
+    global _TERMINAL_HWND
+    _TERMINAL_HWND = _capture_terminal_hwnd()
+    logger.info("win_notify: captured terminal HWND = %d", _TERMINAL_HWND)
+
+    # Write current process PID for the focus script (backward compat)
     try:
         _PID_FILE.write_text(str(os.getpid()))
         logger.info("win_notify: wrote PID %d to %s", os.getpid(), _PID_FILE)

@@ -107,6 +107,7 @@ try:
         CLI title format: 'Hermes Agent' or 'PowerShell' etc.
         Returns the conversation name, or empty string if not found.
         """
+        import re
         try:
             if not hwnd or not win32gui.IsWindow(hwnd):
                 return ""
@@ -115,8 +116,8 @@ try:
             if "·" in title:
                 parts = title.split("·")
                 name = parts[0].strip()
-                # Remove leading emoji (⏳)
-                name = name.lstrip("⏳ ").strip()
+                # Remove leading non-word characters (emoji, symbols, spaces)
+                name = re.sub(r'^[^\w\u4e00-\u9fff]+', '', name).strip()
                 if name:
                     return name
             # CLI format or unknown
@@ -225,6 +226,9 @@ except ImportError:
 
     def _capture_terminal_hwnd() -> int:
         return 0
+
+    def _extract_conversation_name(hwnd: int) -> str:
+        return ""
 
 
 def _focus_url(hwnd: int = 0) -> str:

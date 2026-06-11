@@ -31,6 +31,7 @@ _APPROVAL_RESPONSE_FILE = _SCRIPT_DIR / "approval_response.txt"
 
 try:
     import win32gui
+    import ctypes
 
     def _is_terminal_foreground() -> bool:
         """Check if a terminal window is currently in the foreground."""
@@ -43,11 +44,69 @@ try:
             return True
 
     def _get_terminal_hwnd() -> int:
-        """Get the current foreground terminal window handle."""
+        """Get the current terminal window handle.
+
+        Strategy:
+        1. Check if current foreground window is a terminal (fast path)
+        2. Find terminal window by PID from hermes_pid.txt
+        3. Search for any window with 'hermes' in title (fallback)
+        """
         try:
-            return win32gui.GetForegroundWindow()
+            # 1. Fast path: if terminal is in foreground, use that
+            fg_hwnd = win32gui.GetForegroundWindow()
+            title = win32gui.GetWindowText(fg_hwnd).lower()
+            keywords = ["powershell", "windowsterminal", "cmd", "mintty", "bash", "hermes"]
+            if any(kw in title for kw in keywords):
+                return fg_hwnd
+
+            # 2. Find by PID from hermes_pid.txt
+            if _PID_FILE.exists():
+                try:
+                    hermes_pid = int(_PID_FILE.read_text().strip())
+                    result = _find_hwnd_by_pid(hermes_pid)
+                    if result:
+                        return result
+                except (ValueError, OSError):
+                    pass
+
+            # 3. Fallback: search for any window with 'hermes' in title
+            return _find_hermes_window()
         except Exception:
             return 0
+
+    def _find_hwnd_by_pid(target_pid: int) -> int:
+        """Find the visible window owned by target_pid."""
+        result = [0]
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def enum_cb(hwnd, _):
+            pid = ctypes.c_uint()
+            win32gui.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value == target_pid and win32gui.IsWindowVisible(hwnd):
+                result[0] = hwnd
+                return False  # stop
+            return True
+
+        win32gui.EnumWindows(enum_cb, 0)
+        return result[0]
+
+    def _find_hermes_window() -> int:
+        """Find any visible window with 'hermes' in the title."""
+        result = [0]
+        buf = ctypes.create_unicode_buffer(256)
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def enum_cb(hwnd, _):
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
+            length = win32gui.GetWindowTextW(hwnd, buf, 256)
+            if length > 0 and "hermes" in buf.value.lower():
+                result[0] = hwnd
+                return False  # stop
+            return True
+
+        win32gui.EnumWindows(enum_cb, 0)
+        return result[0]
 
 except ImportError:
     logger.warning("win32gui not available — foreground detection disabled")
@@ -137,16 +196,7 @@ def _plugin_approval_handler(command: str, description: str, timeout: int) -> Op
     Returns 'once', 'session', 'always', 'deny', or None (timeout/no response).
     """
     # If terminal is in foreground, skip toast and let terminal handle it
-    fg_title = ""
-    try:
-        import win32gui
-        fg_hwnd = win32gui.GetForegroundWindow()
-        fg_title = win32gui.GetWindowText(fg_hwnd)
-    except Exception:
-        pass
-    is_fg = _is_terminal_foreground()
-    logger.info("win_notify handler: is_foreground=%s, title=[%s]", is_fg, fg_title[:60])
-    if is_fg:
+    if _is_terminal_foreground():
         return None
 
     # Clean up any stale response file

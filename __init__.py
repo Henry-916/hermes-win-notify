@@ -266,10 +266,9 @@ try:
 
         def _fire():
             try:
-                title_display = f"[{_CONVERSATION_NAME}] " + title if _CONVERSATION_NAME else title
                 toast = Notification(
                     app_id="Hermes Agent",
-                    title=title_display,
+                    title=title,
                     msg=body,
                     duration="long",
                     launch=_focus_url(hwnd),
